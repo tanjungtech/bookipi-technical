@@ -27,7 +27,7 @@ mongoose.connect(process.env.DB_URI)
 // Get flashsale setup
 app.get('/flashsale-setup', async (req, res) => {
   try {
-    const saleSetup = await FlashsaleSetup.findOne({});
+    const saleSetup = await FlashsaleSetup.findOne();
     res.status(200).json(saleSetup);
   } catch (err) {
     res.status(500).json(err);
