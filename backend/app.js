@@ -30,17 +30,13 @@ app.get('/flashsale-setup', async (req, res) => {
     const saleSetup = await FlashsaleSetup.findOne();
     res.status(200).json(saleSetup);
   } catch (err) {
-    res.status(500).json(err);
+    res.status(500).json({error: "Database connection failed"});
   }
 });
 
 // GET requests to the root URL
 app.get('/', (req, res) => {
-  res.send('Server is running!');
+  res.status(200).send('Server is running!');
 });
 
-
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server listening at http://localhost:${PORT}`);
-});
+module.exports = app;
