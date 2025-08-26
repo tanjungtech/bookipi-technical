@@ -1,0 +1,21 @@
+config:
+  target: "http://localhost:3020"
+  http:
+    pool: 100   # reuse 100 sockets
+    timeout: 30
+  phases:
+    - duration: 20 # run for 20 seconds
+      arrivalRate: 1000 # spawn 1000 requests per second
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: Flash Sale Purchase
+    flow:
+      - post:
+          url: "/purchase"
+          json:
+            user: "user-{{$randomNumber(1,1000)}}"
+      - think: 0.1   # small pause
+
