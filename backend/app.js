@@ -123,12 +123,12 @@ app.post("/purchase", async (req, res) => {
       return res.status(404).json({ status: "notfound", message: "No sale setup" });
     }
 
-    // const status = getStatus(saleSetup);
-
-    // Comment this condition if you run the stress test
-    // if (status !== "active") {
-    //   return res.status(400).json({ status: "inactive", message: "Flash sale not active" });
-    // }
+    const status = getStatus(saleSetup);
+    
+    //  Comment this condition if you run the stress test
+    if (status !== "active") {
+      return res.status(400).json({ status: "inactive", message: "Flash sale not active" });
+    }
 
     const result = await redis.eval(luaScript, 2, "flashsale:stock", "flashsale:buyers", user);
 
