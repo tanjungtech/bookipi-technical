@@ -1,58 +1,115 @@
-const request = require('supertest');
-const mongoose = require('mongoose');
+const request = require("supertest");
+const app = require("./server");
 
-// Mock Mongoose
-jest.mock('mongoose', () => ({
-  connect: jest.fn(() => Promise.resolve()),
-  disconnect: jest.fn(() => Promise.resolve()),
-  connection: {
-    close: jest.fn(),
-  },
-}));
+// Mock Redis
+jest.mock("ioredis", () => {
+  return jest.fn().mockImplementation(() => {
+    return {
+      data: {},
+      sets: { "flashsale:buyers": new Set() },
+      get: jest.fn(function (key) {
+        return this.data[key] || null;
+      }),
+      set: jest.fn(function (key, val) {
+        this.data[key] = val;
+        return "OK";
+      }),
+      del: jest.fn(function (key) {
+        delete this.data[key];
+        if (this.sets[key]) this.sets[key].clear();
+        return 1;
+      }),
+      sismember: jest.fn(function (key, member) {
+        return this.sets[key] && this.sets[key].has(member) ? 1 : 0;
+      }),
+      sadd: jest.fn(function (key, member) {
+        if (!this.sets[key]) this.sets[key] = new Set();
+        this.sets[key].add(member);
+        return 1;
+      }),
+      decr: jest.fn(function (key) {
+        this.data[key] = (parseInt(this.data[key]) || 0) - 1;
+        return this.data[key];
+      }),
+      eval: jest.fn(function (_script, _keys, stockKey, buyersKey, user) {
+        // mimic your Lua logic
+        if (this.sets[buyersKey] && this.sets[buyersKey].has(user)) return 1;
+        const stock = parseInt(this.data[stockKey] || "0");
+        if (stock <= 0) return 2;
+        this.data[stockKey] = stock - 1;
+        if (!this.sets[buyersKey]) this.sets[buyersKey] = new Set();
+        this.sets[buyersKey].add(user);
+        return 0;
+      }),
+    };
+  });
+});
 
-// Mock FlashsaleSetup model
-const mockFlashsaleSetup = {
-  _id: '60c72b2f9b1d8f001c8a4d7d',
-  name: 'Summer Sale',
-  isActive: true,
-};
+const FlashsaleSetup = require("./models/FlashsaleSetup");
 
-jest.mock('./models/FlashsaleSetup', () => ({
-  findOne: jest.fn(() => Promise.resolve(mockFlashsaleSetup)),
-}));
+describe("Flash Sale API", () => {
+  let saleSetup;
 
-const FlashsaleSetup = require('./models/FlashsaleSetup'); // keep reference
-const app = require('./app.js');
-
-describe('API Endpoints', () => {
   beforeEach(() => {
+    saleSetup = {
+      _id: "123",
+      opening: new Date(Date.now() - 1000).toISOString(),
+      preOpen: 0,
+      stoppedAt: 100000,
+      stock: 5,
+      buyers: [],
+    };
+
+    FlashsaleSetup.findOne.mockResolvedValue(saleSetup);
+    FlashsaleSetup.updateOne.mockResolvedValue({ acknowledged: true });
+  });
+
+  afterEach(() => {
     jest.clearAllMocks();
-    FlashsaleSetup.findOne.mockResolvedValue(mockFlashsaleSetup);
   });
 
-  afterAll(async () => {
-    await mongoose.connection.close();
-    await mongoose.disconnect();
+  test("Check flash sale setup", async () => {
+    const res = await request(app).get("/flashsale-setup");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("active");
+    expect(res.body.stock).toBe(5);
   });
 
-  it('GET / should return "Server is running!"', async () => {
-    const response = await request(app).get('/');
-    expect(response.status).toBe(200);
-    expect(response.text).toBe('Server is running!');
+  test("/purchase: Generate first purchase", async () => {
+    const res = await request(app)
+      .post("/purchase")
+      .send({ user: "alice" })
+      .set("Content-Type", "application/json");
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("Successful");
   });
 
-  it('GET /flashsale-setup should return flashsale data', async () => {
-    const response = await request(app).get('/flashsale-setup');
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual(mockFlashsaleSetup);
+  test("/purchase: reject duplicate purchase", async () => {
+    // First purchase
+    await request(app).post("/purchase").send({ user: "bob" });
+
+    // Second purchase same user
+    const res = await request(app).post("/purchase").send({ user: "bob" });
+    expect(res.status).toBe(403);
+    expect(res.body.status).toBe("exists");
   });
 
-  it('GET /flashsale-setup should return a 500 error on database failure', async () => {
-    FlashsaleSetup.findOne.mockRejectedValue(new Error('Database connection failed'));
+  test("/purchase: reject if sold out", async () => {
+    // Set stock to 0
+    saleSetup.stock = 0;
+    FlashsaleSetup.findOne.mockResolvedValue(saleSetup);
 
-    const response = await request(app).get('/flashsale-setup');
+    const res = await request(app).post("/purchase").send({ user: "charlie" });
+    expect(res.status).toBe(409);
+    expect(res.body.status).toBe("soldout");
+  });
 
-    expect(response.status).toBe(500);
-    expect(response.body).toEqual({ error: 'Database connection failed' }); // adjust to your app’s error response
+  test("Check purchase status by username", async () => {
+    await request(app).post("/purchase").send({ user: "dave" });
+
+    const res = await request(app).get("/check/dave");
+    expect(res.status).toBe(200);
+    expect(res.body.purchased).toBe(true);
   });
 });
